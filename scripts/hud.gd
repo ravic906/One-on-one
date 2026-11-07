@@ -11,8 +11,23 @@ func _ready() -> void:
 	font = ThemeDB.fallback_font
 
 
+var _last_sig := []
+
+
+## Only redraw when something on screen actually changes.
 func _process(_delta: float) -> void:
-	queue_redraw()
+	var sig := [visible]
+	if arena and arena.fighters.size() == 2:
+		var an: Dictionary = arena.ann
+		sig = [arena.phase, arena.demo, arena.showcase, ceili(maxf(0.0, arena.timer_frames) / 60.0),
+			an.text, an.t if an.t < 101 else -1, arena.wins[0], arena.wins[1], size]
+		for f in arena.fighters:
+			var full: bool = f.meter >= 100.0
+			sig.append_array([f.hp, int(f.disp_hp), int(f.meter), f.combo_n if f.combo_show > 0 else 0,
+				int(Time.get_ticks_msec() / 120) % 2 if full else -1])
+	if sig != _last_sig:
+		_last_sig = sig
+		queue_redraw()
 
 
 func _text(pos: Vector2, s: String, size: int, col: Color, align := HORIZONTAL_ALIGNMENT_CENTER, width := -1.0, outline := 6) -> void:

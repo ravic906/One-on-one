@@ -51,7 +51,7 @@ godot --headless --script res://tests/run_tests.gd          # rules tests
 godot --headless --export-release "Web" build/web/index.html  # web build
 cd build/web && python3 -m http.server 8000                    # open http://localhost:8000
 ```
-Developer flags (pass after `--`): `--showcase` runs a CPU-vs-CPU match with the HUD, and `--slowmo=0.2` slows the game down, which helps for trailers and screenshots.
+Developer flags (pass after `--`): `--showcase` runs a CPU-vs-CPU match with the HUD, and `--slowmo=0.2` slows the game down, which helps for trailers and screenshots, and `--fps` shows the frame rate, frame time and draw calls.
 
 ### Phone link (GitHub Pages)
 `.github/workflows/web.yml` runs the tests and exports the web build on every push. To publish it, turn Pages on once: **Settings → Pages → Build and deployment → Source: GitHub Actions**. Then re-run the workflow, or push again.

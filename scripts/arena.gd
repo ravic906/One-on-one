@@ -50,7 +50,12 @@ var ko_focus: Fighter
 var super_user: Fighter
 
 var _acc := 0.0
-var _bg_layer: Layer
+var _parallax: Array = []    ## [node, factor] pairs moved with the camera
+var _cloud_nodes: Array = []
+var _antenna_light: Layer
+var _light_on := false
+var _dark_drawn := false
+var _flash_drawn := false
 var _dark_layer: Layer
 var _fx_layer: Layer         ## normal blending: dust, motes
 var _glow_layer: Layer       ## additive blending: sparks, trails, projectiles
@@ -63,7 +68,7 @@ var _motes: Array = []
 
 func _init() -> void:
 	_build_stage()
-	_bg_layer = _make_layer(_draw_bg)
+	_build_stage_nodes()
 	_dark_layer = _make_layer(_draw_dark)
 	for i in 2:
 		var f := Fighter.new()
@@ -115,11 +120,48 @@ func _make_vignette() -> TextureRect:
 	return tr
 
 
-func _make_layer(cb: Callable) -> Layer:
+func _make_layer(cb: Callable, parent: Node = null) -> Layer:
 	var l := Layer.new()
 	l.cb = cb
-	add_child(l)
+	(parent if parent else self).add_child(l)
 	return l
+
+
+## Background layers: each is drawn once and then only moved (parallax) by the camera.
+func _build_stage_nodes() -> void:
+	_parallax.append([_make_layer(_draw_sky), 0.0])
+	var sun := Node2D.new()
+	add_child(sun)
+	var glow := Sprite2D.new()
+	var g := Gradient.new()
+	g.offsets = PackedFloat32Array([0.0, 0.25, 1.0])
+	g.colors = PackedColorArray([Color(1.0, 0.6, 0.38, 0.55), Color(1.0, 0.55, 0.35, 0.32), Color(1.0, 0.5, 0.35, 0.0)])
+	var tex := GradientTexture2D.new()
+	tex.gradient = g
+	tex.fill = GradientTexture2D.FILL_RADIAL
+	tex.fill_from = Vector2(0.5, 0.5)
+	tex.fill_to = Vector2(1.0, 0.5)
+	tex.width = 128
+	tex.height = 128
+	glow.texture = tex
+	glow.position = SUN_POS
+	glow.scale = Vector2.ONE * (300.0 / 64.0)
+	sun.add_child(glow)
+	_make_layer(_draw_sun, sun)
+	_parallax.append([sun, 0.08])
+	var clouds := Node2D.new()
+	add_child(clouds)
+	for c in _clouds:
+		var cl := _make_layer(_draw_cloud.bind(c), clouds)
+		_cloud_nodes.append(cl)
+	_parallax.append([clouds, 0.15])
+	_parallax.append([_make_layer(_draw_skyline.bind(0)), 0.28])
+	_parallax.append([_make_layer(_draw_skyline.bind(1)), 0.52])
+	var ant := _make_layer(_draw_antenna)
+	_antenna_light = _make_layer(_draw_antenna_light, ant)
+	_parallax.append([ant, 0.55])
+	_make_layer(_draw_floor)
+	_parallax.append([_make_layer(_draw_reflection), 0.08])
 
 
 ## Starts a match. p2_ai is always on; p1_ai turns the match into a CPU-vs-CPU demo.
@@ -173,7 +215,6 @@ func announce(text: String, sub := "") -> void:
 
 func _process(delta: float) -> void:
 	_update_camera(delta)
-	_bg_layer.queue_redraw()
 	touch.visible = not demo and phase in ["intro", "fight", "ko"] and touch.wanted()
 
 
@@ -207,6 +248,8 @@ func _update_camera(delta: float) -> void:
 		off = Vector2(randf_range(-shake, shake), randf_range(-shake, shake))
 	scale = Vector2(zoom, zoom)
 	position = vp * 0.5 - cam * zoom + off
+	for pl in _parallax:
+		pl[0].position = _par(pl[1])
 
 
 func _physics_process(_delta: float) -> void:
@@ -553,6 +596,14 @@ func _update_fx() -> void:
 			p.vel *= 0.94
 		p.life -= 1
 	parts = parts.filter(func(p): return p.life > 0)
+	for i in _clouds.size():
+		var c: Dictionary = _clouds[i]
+		var cx: float = fposmod(c.x + frame * c.speed + 900.0, D.W + 1800.0) - 900.0
+		_cloud_nodes[i].position = Vector2(cx, c.y)
+	var on := (frame / 40) % 2 == 0
+	if on != _light_on:
+		_light_on = on
+		_antenna_light.queue_redraw()
 	for m in _motes:
 		var mp: Vector2 = m.pos
 		mp += m.vel + Vector2(sin(frame * 0.02 + m.ph) * 0.15, 0)
@@ -568,15 +619,21 @@ func _update_fx() -> void:
 			f.disp_hp = f.hp
 	_fx_layer.queue_redraw()
 	_glow_layer.queue_redraw()
-	_dark_layer.queue_redraw()
-	_flash_layer.queue_redraw()
+	# Full-screen overlays only redraw while active (plus one frame to clear).
+	if super_flash > 0 or _dark_drawn:
+		_dark_layer.queue_redraw()
+		_dark_drawn = super_flash > 0
+	if white_flash > 0.01 or _flash_drawn:
+		_flash_layer.queue_redraw()
+		_flash_drawn = white_flash > 0.01
 
 
 ## Normal-blended effects: dust clouds and floating motes.
 func _draw_fx(ci: CanvasItem) -> void:
 	for m in _motes:
 		var a := 0.25 + 0.2 * sin(frame * 0.05 + m.ph)
-		ci.draw_circle(m.pos, m.r, Color(1.0, 0.8, 0.6, a))
+		var r: float = m.r
+		ci.draw_rect(Rect2(m.pos.x - r, m.pos.y - r, r * 2.0, r * 2.0), Color(1.0, 0.8, 0.6, a))
 	for p in parts:
 		if p.kind == "dust":
 			var k: float = float(p.life) / p.max
@@ -672,7 +729,7 @@ func _build_stage() -> void:
 	for i in 7:
 		_clouds.append({"x": rng.randf_range(-600, D.W + 600), "y": rng.randf_range(40, 230),
 			"w": rng.randf_range(90, 200), "speed": rng.randf_range(0.08, 0.25)})
-	for i in 26:
+	for i in 14:
 		_motes.append({"pos": Vector2(rng.randf_range(-200, D.W + 200), rng.randf_range(150, D.FLOOR)),
 			"vel": Vector2(rng.randf_range(0.1, 0.35), rng.randf_range(-0.25, -0.05)),
 			"r": rng.randf_range(1.0, 2.4), "ph": rng.randf() * TAU})
@@ -683,94 +740,99 @@ func _par(f: float) -> Vector2:
 	return (cam - Vector2(D.W * 0.5, D.H * 0.5)) * (1.0 - f)
 
 
-func _draw_bg(ci: CanvasItem) -> void:
-	var top := -500.0
-	var bottom := D.H + 500.0
-	var L := -900.0
-	var R := D.W + 900.0
-	# Sky gradient (dusk), fixed to the screen.
-	ci.draw_set_transform(_par(0.0), 0.0, Vector2.ONE)
-	var bands := [Color(0.06, 0.04, 0.14), Color(0.17, 0.08, 0.28), Color(0.5, 0.16, 0.36), Color(0.96, 0.46, 0.3), Color(1.0, 0.62, 0.36)]
-	var ys := [top, 110.0, 250.0, 370.0, 430.0]
-	for i in bands.size() - 1:
-		var pts := PackedVector2Array([Vector2(L, ys[i]), Vector2(R, ys[i]), Vector2(R, ys[i + 1]), Vector2(L, ys[i + 1])])
-		ci.draw_polygon(pts, PackedColorArray([bands[i], bands[i], bands[i + 1], bands[i + 1]]))
-	ci.draw_set_transform(_par(0.03), 0.0, Vector2.ONE)
+const SUN_POS := Vector2(640, 340)
+const HORIZON := 420.0
+const BG_L := -900.0
+const BG_R := D.W + 900.0
+const SKY := [Color(0.06, 0.04, 0.14), Color(0.17, 0.08, 0.28), Color(0.5, 0.16, 0.36), Color(0.96, 0.46, 0.3), Color(1.0, 0.62, 0.36)]
+
+
+func _draw_sky(ci: CanvasItem) -> void:
+	var ys := [-500.0, 110.0, 250.0, 370.0, 430.0]
+	for i in SKY.size() - 1:
+		var pts := PackedVector2Array([Vector2(BG_L, ys[i]), Vector2(BG_R, ys[i]), Vector2(BG_R, ys[i + 1]), Vector2(BG_L, ys[i + 1])])
+		ci.draw_polygon(pts, PackedColorArray([SKY[i], SKY[i], SKY[i + 1], SKY[i + 1]]))
 	for st in _stars:
-		var tw := 0.45 + 0.35 * sin(frame * 0.05 + st.x)
-		ci.draw_circle(st, 1.3, Color(1, 1, 1, tw * clampf((260.0 - st.y) / 200.0, 0.0, 1.0)))
-	# Setting sun with glow and retro bands.
-	ci.draw_set_transform(_par(0.08), 0.0, Vector2.ONE)
-	var sun := Vector2(640, 340)
-	for i in 16:
-		ci.draw_circle(sun, 66.0 + i * 14.0, Color(1.0, 0.55, 0.35, 0.028))
-	ci.draw_circle(sun, 64, Color(1.0, 0.72, 0.42))
-	ci.draw_circle(sun + Vector2(0, -10), 52, Color(1.0, 0.84, 0.55))
+		var a := clampf((260.0 - st.y) / 200.0, 0.0, 1.0) * (0.5 + 0.4 * fposmod(st.x * 0.37, 1.0))
+		ci.draw_rect(Rect2(st.x - 1.0, st.y - 1.0, 2.2, 2.2), Color(1, 1, 1, a))
+
+
+func _draw_sun(ci: CanvasItem) -> void:
+	ci.draw_circle(SUN_POS, 64, Color(1.0, 0.72, 0.42))
+	ci.draw_circle(SUN_POS + Vector2(0, -10), 52, Color(1.0, 0.84, 0.55))
 	for i in 5:
-		var by := sun.y + 8.0 + i * 11.0
-		ci.draw_rect(Rect2(sun.x - 70, by, 140, 2.0 + i * 1.3), bands[3])
-	# Drifting clouds lit from below.
-	ci.draw_set_transform(_par(0.15), 0.0, Vector2.ONE)
-	for c in _clouds:
-		var cx: float = fposmod(c.x + frame * c.speed + 900.0, D.W + 1800.0) - 900.0
-		var cy: float = c.y
-		var cw: float = c.w
-		for j in 4:
-			var o := Vector2(cx + (j - 1.5) * cw * 0.3, cy + absf(j - 1.5) * 6.0)
-			ci.draw_set_transform(_par(0.15) + o, 0.0, Vector2(1.0, 0.38))
-			ci.draw_circle(Vector2.ZERO, cw * 0.32, Color(0.55, 0.22, 0.42, 0.35))
-			ci.draw_circle(Vector2(0, 10), cw * 0.26, Color(1.0, 0.55, 0.45, 0.18))
-	# Skyline silhouettes: far layer then near layer.
-	var horizon := 420.0
-	for layer in 2:
-		ci.draw_set_transform(_par(0.28 if layer == 0 else 0.52), 0.0, Vector2.ONE)
-		for b in _skyline:
-			if b.layer != layer:
-				continue
-			var col := Color(0.36, 0.14, 0.34) if layer == 0 else Color(0.12, 0.06, 0.17)
-			var bx: float = b.x
-			var bw: float = b.w
-			var bh: float = b.h
-			ci.draw_rect(Rect2(bx, horizon - bh, bw, bh + 40.0), col)
-			if layer == 1:
-				ci.draw_rect(Rect2(bx + bw - 3.0, horizon - bh, 3.0, bh), Color(1.0, 0.5, 0.35, 0.18))
-				match int(b.roof):
-					1:
-						ci.draw_rect(Rect2(bx + bw * 0.3, horizon - bh - 14.0, bw * 0.3, 14.0), col)
-					2:
-						ci.draw_line(Vector2(bx + bw * 0.5, horizon - bh), Vector2(bx + bw * 0.5, horizon - bh - 30.0), col, 3.0)
-				for wv in b.wins:
-					ci.draw_rect(Rect2(bx + wv.x, horizon - bh + wv.y, 6, 9), Color(1.0, 0.83, 0.45, 0.6))
-		if layer == 0:
-			ci.draw_rect(Rect2(L, horizon - 30.0, R - L, 70.0), Color(1.0, 0.45, 0.4, 0.1))
-	# Antenna with a blinking light.
-	ci.draw_set_transform(_par(0.55), 0.0, Vector2.ONE)
+		var by := SUN_POS.y + 8.0 + i * 11.0
+		ci.draw_rect(Rect2(SUN_POS.x - 70, by, 140, 2.0 + i * 1.3), SKY[3])
+
+
+func _draw_cloud(ci: CanvasItem, c: Dictionary) -> void:
+	var cw: float = c.w
+	for j in 4:
+		var o := Vector2((j - 1.5) * cw * 0.3, absf(j - 1.5) * 6.0)
+		ci.draw_set_transform(o, 0.0, Vector2(1.0, 0.38))
+		ci.draw_circle(Vector2.ZERO, cw * 0.32, Color(0.55, 0.22, 0.42, 0.35))
+		ci.draw_circle(Vector2(0, 10), cw * 0.26, Color(1.0, 0.55, 0.45, 0.18))
+	ci.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+
+func _draw_skyline(ci: CanvasItem, layer: int) -> void:
+	for b in _skyline:
+		if b.layer != layer:
+			continue
+		var col := Color(0.36, 0.14, 0.34) if layer == 0 else Color(0.12, 0.06, 0.17)
+		var bx: float = b.x
+		var bw: float = b.w
+		var bh: float = b.h
+		ci.draw_rect(Rect2(bx, HORIZON - bh, bw, bh + 40.0), col)
+		if layer == 1:
+			ci.draw_rect(Rect2(bx + bw - 3.0, HORIZON - bh, 3.0, bh), Color(1.0, 0.5, 0.35, 0.18))
+			match int(b.roof):
+				1:
+					ci.draw_rect(Rect2(bx + bw * 0.3, HORIZON - bh - 14.0, bw * 0.3, 14.0), col)
+				2:
+					ci.draw_line(Vector2(bx + bw * 0.5, HORIZON - bh), Vector2(bx + bw * 0.5, HORIZON - bh - 30.0), col, 3.0)
+			for wv in b.wins:
+				ci.draw_rect(Rect2(bx + wv.x, HORIZON - bh + wv.y, 6, 9), Color(1.0, 0.83, 0.45, 0.6))
+	if layer == 0:
+		ci.draw_rect(Rect2(BG_L, HORIZON - 30.0, BG_R - BG_L, 70.0), Color(1.0, 0.45, 0.4, 0.1))
+
+
+func _draw_antenna(ci: CanvasItem) -> void:
 	var dk := Color(0.1, 0.05, 0.14)
 	ci.draw_line(Vector2(140, 440), Vector2(140, 250), dk, 4)
 	ci.draw_line(Vector2(120, 300), Vector2(160, 300), dk, 3)
 	ci.draw_line(Vector2(126, 330), Vector2(154, 330), dk, 3)
-	if (frame / 40) % 2 == 0:
+
+
+func _draw_antenna_light(ci: CanvasItem) -> void:
+	if _light_on:
 		ci.draw_circle(Vector2(140, 248), 5, Color(1, 0.2, 0.2))
 		ci.draw_circle(Vector2(140, 248), 14, Color(1, 0.2, 0.2, 0.25))
-	# Rooftop floor (moves with the fighters).
-	ci.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
-	var floor_pts := PackedVector2Array([Vector2(L, horizon), Vector2(R, horizon), Vector2(R, bottom), Vector2(L, bottom)])
+
+
+## Warm sun reflection streaking across the roof; moves with the sun layer.
+func _draw_reflection(ci: CanvasItem) -> void:
+	var bottom := D.H + 500.0
+	var sx := SUN_POS.x
+	var refl := PackedVector2Array([Vector2(sx - 45, HORIZON + 18), Vector2(sx + 45, HORIZON + 18), Vector2(sx + 180, bottom), Vector2(sx - 180, bottom)])
+	ci.draw_polygon(refl, PackedColorArray([Color(1, 0.6, 0.4, 0.16), Color(1, 0.6, 0.4, 0.16), Color(1, 0.6, 0.4, 0.0), Color(1, 0.6, 0.4, 0.0)]))
+
+
+func _draw_floor(ci: CanvasItem) -> void:
+	var bottom := D.H + 500.0
+	var floor_pts := PackedVector2Array([Vector2(BG_L, HORIZON), Vector2(BG_R, HORIZON), Vector2(BG_R, bottom), Vector2(BG_L, bottom)])
 	var f_top := Color(0.22, 0.17, 0.27)
 	var f_bot := Color(0.06, 0.05, 0.1)
 	ci.draw_polygon(floor_pts, PackedColorArray([f_top, f_top, f_bot, f_bot]))
-	# Warm sun reflection streaking across the roof.
-	var sx := 640.0 + _par(0.08).x
-	var refl := PackedVector2Array([Vector2(sx - 45, horizon + 18), Vector2(sx + 45, horizon + 18), Vector2(sx + 180, bottom), Vector2(sx - 180, bottom)])
-	ci.draw_polygon(refl, PackedColorArray([Color(1, 0.6, 0.4, 0.16), Color(1, 0.6, 0.4, 0.16), Color(1, 0.6, 0.4, 0.0), Color(1, 0.6, 0.4, 0.0)]))
-	ci.draw_rect(Rect2(L, horizon, R - L, 14), Color(0.36, 0.28, 0.4))
-	ci.draw_rect(Rect2(L, horizon, R - L, 3), Color(1.0, 0.62, 0.45, 0.6))
-	ci.draw_rect(Rect2(L, horizon + 14, R - L, 4), Color(0.06, 0.04, 0.09))
+	ci.draw_rect(Rect2(BG_L, HORIZON, BG_R - BG_L, 14), Color(0.36, 0.28, 0.4))
+	ci.draw_rect(Rect2(BG_L, HORIZON, BG_R - BG_L, 3), Color(1.0, 0.62, 0.45, 0.6))
+	ci.draw_rect(Rect2(BG_L, HORIZON + 14, BG_R - BG_L, 4), Color(0.06, 0.04, 0.09))
 	for i in range(-16, 30):
 		var x0 := i * 60.0
-		ci.draw_line(Vector2(x0, horizon + 18), Vector2(D.W * 0.5 + (x0 - D.W * 0.5) * 2.2, bottom), Color(0.26, 0.2, 0.31, 0.7), 2)
+		ci.draw_line(Vector2(x0, HORIZON + 18), Vector2(D.W * 0.5 + (x0 - D.W * 0.5) * 2.2, bottom), Color(0.26, 0.2, 0.31, 0.7), 2)
 	for j in 5:
-		var ly := horizon + 18.0 + pow(j / 5.0, 1.6) * (bottom - horizon)
-		ci.draw_line(Vector2(L, ly), Vector2(R, ly), Color(0.26, 0.2, 0.31, 0.5), 1.5)
+		var ly := HORIZON + 18.0 + pow(j / 5.0, 1.6) * (bottom - HORIZON)
+		ci.draw_line(Vector2(BG_L, ly), Vector2(BG_R, ly), Color(0.26, 0.2, 0.31, 0.5), 1.5)
 	# Corner pillars (stage edges) with a warm rim.
 	for wx in [D.STAGE_L - 38.0, D.STAGE_R + 8.0]:
 		ci.draw_rect(Rect2(wx, D.FLOOR - 70, 30, 74), Color(0.2, 0.16, 0.25))

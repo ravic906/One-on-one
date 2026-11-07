@@ -11,6 +11,8 @@ class Portrait extends Control:
 	var font: Font
 
 	func _process(delta: float) -> void:
+		if not is_visible_in_tree():
+			return
 		t += delta
 		queue_redraw()
 
@@ -44,6 +46,8 @@ var sound_btn: Button
 var result_title: Label
 var result_sub: Label
 var result_stats: Label
+var fps_label: Label
+var _fps_t := 0.0
 
 
 func _ready() -> void:
@@ -70,7 +74,8 @@ func _ready() -> void:
 
 
 ## Developer launch flags (after "--"): --showcase runs a CPU-vs-CPU match with the HUD,
-## --slowmo=0.2 slows the whole game down (handy for capturing trailers and screenshots).
+## --slowmo=0.2 slows the whole game down (handy for capturing trailers and screenshots),
+## --fps shows frame rate, frame time and draw calls in the corner (and logs them once a second).
 func _apply_dev_flags() -> void:
 	for arg in OS.get_cmdline_user_args():
 		if arg == "--showcase":
@@ -79,9 +84,26 @@ func _apply_dev_flags() -> void:
 			show_screen("")
 		elif arg.begins_with("--slowmo="):
 			Engine.time_scale = clampf(float(arg.get_slice("=", 1)), 0.05, 1.0)
+		elif arg == "--fps":
+			var layer := CanvasLayer.new()
+			layer.layer = 20
+			add_child(layer)
+			fps_label = _label("", 14, Color(0.6, 1.0, 0.6), 4)
+			fps_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+			fps_label.position = Vector2(8, 120)
+			layer.add_child(fps_label)
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	if fps_label:
+		_fps_t += delta
+		if _fps_t >= 1.0:
+			_fps_t = 0.0
+			var txt := "FPS %d  process %.1f ms  draws %d" % [Engine.get_frames_per_second(),
+				Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0,
+				Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)]
+			fps_label.text = txt
+			print("PERF ", txt)
 	pause_btn.visible = not arena.demo and not arena.paused and arena.phase in ["intro", "fight", "ko"]
 
 

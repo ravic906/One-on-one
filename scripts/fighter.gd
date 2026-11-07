@@ -480,7 +480,7 @@ func _update_motion_fx() -> void:
 	# After-images while dashing or during the super rush.
 	var fast: bool = state == "dash" or (state == "attack" and move.get("super", false) and mf > int(move.s))
 	if fast and state_t % 2 == 0:
-		ghosts.append({"pos": position, "pose": rp.duplicate(), "fc": facing, "life": 12})
+		ghosts.append({"pos": position, "pose": rp.duplicate(), "fc": facing, "life": 8})
 	for g in ghosts:
 		g.life -= 1
 	ghosts = ghosts.filter(func(g): return g.life > 0)
@@ -495,7 +495,7 @@ func _draw() -> void:
 	draw_circle(Vector2.ZERO, 28.0 * s * (1.0 - h), Color(0, 0, 0, 0.3))
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	for g in ghosts:
-		var k: float = g.life / 12.0
+		var k: float = g.life / 8.0
 		draw_body(self, g.pose, ch, g.fc, false, 0.45 * k, anim_t,
 			Transform2D(0.0, g.pos - position), Color(ch.accent, 1.0))
 	var alpha := 1.0
@@ -544,17 +544,30 @@ const LIGHT := Vector2(0.55, -0.83)          ## sunset light direction (upper ri
 const RIM := Color(1.0, 0.72, 0.45)
 
 
+## Unit half-circle in a frame where +x points along the capsule (precomputed once).
+static var _HALF: Array = _make_half()
+
+
+static func _make_half() -> Array:
+	var out := []
+	for i in 7:
+		var t := -PI * 0.5 + PI * i / 6.0
+		out.append(Vector2(cos(t), sin(t)))
+	return out
+
+
 ## Outline of a tapered capsule from a (radius ra) to b (radius rb).
 static func _capsule(a: Vector2, b: Vector2, ra: float, rb: float) -> PackedVector2Array:
 	var d := b - a
-	var ang := d.angle() if d.length() > 0.001 else PI * 0.5
+	var l := d.length()
+	d = d / l if l > 0.001 else Vector2(0, 1)
+	var n := d.orthogonal()
 	var pts := PackedVector2Array()
+	pts.resize(14)
 	for i in 7:
-		var t := ang - PI * 0.5 + PI * i / 6.0
-		pts.append(b + Vector2(cos(t), sin(t)) * rb)
-	for i in 7:
-		var t := ang + PI * 0.5 + PI * i / 6.0
-		pts.append(a + Vector2(cos(t), sin(t)) * ra)
+		var u: Vector2 = _HALF[i]
+		pts[i] = b + (d * u.x + n * u.y) * rb
+		pts[7 + i] = a + (-d * u.x - n * u.y) * ra
 	return pts
 
 
