@@ -31,7 +31,6 @@ func _ready() -> void:
 	if OS.has_feature("web"):
 		var r = JavaScriptBridge.eval("(('ontouchstart' in window) || navigator.maxTouchPoints > 0) ? 1 : 0", true)
 		force_show = r != null and int(r) == 1
-		print("touch controls: js=", r, " show=", force_show)
 
 
 ## Show on touch devices (phones/tablets, or a browser on one).
