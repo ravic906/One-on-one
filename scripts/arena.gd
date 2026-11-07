@@ -23,6 +23,7 @@ var sfx: Sfx
 var hud: Control
 var touch: Control
 var demo := false            ## CPU vs CPU attract mode behind the menu
+var showcase := false        ## CPU vs CPU with the HUD visible (developer flag)
 var manual := false          ## tests drive inputs themselves
 var paused := false
 
@@ -42,12 +43,22 @@ var ann := {"text": "", "t": 0, "sub": ""}
 var stats := {"max_combo": 0}
 var difficulty := "normal"
 
+var cam := Vector2(D.W * 0.5, D.H * 0.5)   ## camera centre in world space
+var zoom := 1.0
+var white_flash := 0.0
+var ko_focus: Fighter
+var super_user: Fighter
+
 var _acc := 0.0
 var _bg_layer: Layer
 var _dark_layer: Layer
-var _fx_layer: Layer
+var _fx_layer: Layer         ## normal blending: dust, motes
+var _glow_layer: Layer       ## additive blending: sparks, trails, projectiles
+var _flash_layer: Layer
 var _skyline: Array = []
 var _stars: Array = []
+var _clouds: Array = []
+var _motes: Array = []
 
 
 func _init() -> void:
@@ -62,10 +73,16 @@ func _init() -> void:
 	fighters[0].opp = fighters[1]
 	fighters[1].opp = fighters[0]
 	_fx_layer = _make_layer(_draw_fx)
+	_glow_layer = _make_layer(_draw_glow)
+	var add_mat := CanvasItemMaterial.new()
+	add_mat.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
+	_glow_layer.material = add_mat
+	_flash_layer = _make_layer(_draw_flash)
 
 	var hud_layer := CanvasLayer.new()
 	hud_layer.layer = 1
 	add_child(hud_layer)
+	hud_layer.add_child(_make_vignette())
 	hud = HUD_SCRIPT.new()
 	hud.arena = self
 	hud_layer.add_child(hud)
@@ -76,6 +93,26 @@ func _init() -> void:
 	touch.arena = self
 	touch_layer.add_child(touch)
 	touch.visible = false
+
+
+func _make_vignette() -> TextureRect:
+	var g := Gradient.new()
+	g.offsets = PackedFloat32Array([0.0, 0.55, 1.0])
+	g.colors = PackedColorArray([Color(0, 0, 0, 0), Color(0, 0, 0, 0), Color(0.03, 0.0, 0.06, 0.55)])
+	var tex := GradientTexture2D.new()
+	tex.gradient = g
+	tex.fill = GradientTexture2D.FILL_RADIAL
+	tex.fill_from = Vector2(0.5, 0.5)
+	tex.fill_to = Vector2(1.2, 0.5)
+	tex.width = 256
+	tex.height = 256
+	var tr := TextureRect.new()
+	tr.texture = tex
+	tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	tr.stretch_mode = TextureRect.STRETCH_SCALE
+	tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	tr.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	return tr
 
 
 func _make_layer(cb: Callable) -> Layer:
@@ -89,6 +126,7 @@ func _make_layer(cb: Callable) -> Layer:
 func setup(p1: int, p2: int, level: String, p1_ai := false, seed_value := -1) -> void:
 	difficulty = level
 	demo = p1_ai
+	showcase = false
 	player_input.clear()
 	cpu_input.clear()
 	fighters[0].setup(D.ROSTER[p1], 0, player_input)
@@ -123,6 +161,8 @@ func start_round() -> void:
 	time_scale = 1.0
 	hitstop = 0
 	super_flash = 0
+	white_flash = 0.0
+	ko_focus = null
 	var final: bool = wins[0] == D.ROUNDS_TO_WIN - 1 and wins[1] == D.ROUNDS_TO_WIN - 1
 	announce("FINAL ROUND" if final else "ROUND %d" % round_n)
 
@@ -131,13 +171,42 @@ func announce(text: String, sub := "") -> void:
 	ann = {"text": text, "t": 0, "sub": sub}
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	_update_camera(delta)
+	_bg_layer.queue_redraw()
+	touch.visible = not demo and phase in ["intro", "fight", "ko"] and touch.wanted()
+
+
+## Fight camera: frames both fighters, zooms in as they close the gap and punches in on a K.O.
+func _update_camera(delta: float) -> void:
 	var vp := get_viewport_rect().size
+	var a := fighters[0]
+	var b := fighters[1]
+	var gap := absf(a.position.x - b.position.x)
+	var focus_x := (a.position.x + b.position.x) * 0.5
+	var tz := clampf(1.0 + (380.0 - gap) / 380.0 * 0.2, 1.0, 1.2)
+	var rate := 3.5
+	if phase == "ko" and ko_focus and phase_t < 80:
+		tz = 1.32
+		focus_x = ko_focus.position.x
+		rate = 7.0
+	if phase == "idle":
+		tz = 1.0
+	var k := 1.0 - exp(-delta * rate)
+	zoom = lerpf(zoom, tz, k)
+	var hw := vp.x / (2.0 * zoom)
+	var lo := D.STAGE_L - 140.0 + hw
+	var hi := D.STAGE_R + 140.0 - hw
+	var tx := D.W * 0.5 if lo > hi else clampf(focus_x, lo, hi)
+	var highest := minf(a.position.y, b.position.y)
+	var lift := clampf((D.FLOOR - 110.0 - highest) * 0.4, 0.0, 70.0)
+	var ty := D.FLOOR - 200.0 / zoom - lift
+	cam = cam.lerp(Vector2(tx, ty), k)
 	var off := Vector2.ZERO
 	if shake > 0.1:
 		off = Vector2(randf_range(-shake, shake), randf_range(-shake, shake))
-	position = Vector2(round((vp.x - D.W) * 0.5), round((vp.y - D.H) * 0.5)) + off
-	touch.visible = not demo and phase in ["intro", "fight", "ko"] and touch.wanted()
+	scale = Vector2(zoom, zoom)
+	position = vp * 0.5 - cam * zoom + off
 
 
 func _physics_process(_delta: float) -> void:
@@ -244,6 +313,9 @@ func on_ko(loser: Fighter, winner: Fighter) -> void:
 	var perfect := winner.hp == winner.max_hp
 	announce("K.O.", "PERFECT" if perfect else "")
 	play_sfx("ko")
+	ko_focus = loser
+	white_flash = 0.42
+	add_shake(14.0)
 	for f in fighters:
 		f.locked = true
 	loser.invuln = 9999
@@ -317,8 +389,14 @@ func on_hit(a: Fighter, d: Fighter, dmg: int, at: Vector2, m: Dictionary) -> voi
 	var is_super: bool = m.get("super", false)
 	hitstop = 14 if is_super else (8 if dmg >= 80 else 5)
 	add_shake(10.0 if is_super else (6.0 if dmg >= 80 else 3.0))
-	sparks(at, a.ch.accent, 14 if dmg >= 80 else 8, 7.0)
+	sparks(at, a.ch.accent, 16 if dmg >= 80 else 9, 8.0)
+	sparks(at, Color(1, 1, 1), 5, 5.0)
 	ring(at, Color.WHITE)
+	star(at, a.ch.accent, 46.0 if is_super else (36.0 if dmg >= 80 else 24.0))
+	if is_super:
+		white_flash = maxf(white_flash, 0.28)
+	elif dmg >= 80:
+		white_flash = maxf(white_flash, 0.12)
 	play_sfx(m.get("sfx", "heavy"))
 	if a.side == 0 and not demo:
 		stats.max_combo = maxi(stats.max_combo, a.combo_n)
@@ -330,12 +408,14 @@ func on_hit(a: Fighter, d: Fighter, dmg: int, at: Vector2, m: Dictionary) -> voi
 
 func on_block(_a: Fighter, _d: Fighter, at: Vector2) -> void:
 	hitstop = 4
-	sparks(at, Color(0.55, 0.8, 1.0), 6, 4.0)
+	sparks(at, Color(0.55, 0.8, 1.0), 7, 4.5)
+	star(at, Color(0.5, 0.75, 1.0), 16.0)
 	play_sfx("block")
 
 
 func on_super(f: Fighter) -> void:
 	super_flash = 32
+	super_user = f
 	play_sfx("super")
 	ring(f.position + Vector2(0, -90), f.ch.accent)
 
@@ -447,14 +527,20 @@ func ring(at: Vector2, color: Color) -> void:
 	parts.append({"pos": at, "vel": Vector2.ZERO, "life": 12, "max": 12, "color": color, "size": 10.0, "kind": "ring"})
 
 
+func star(at: Vector2, color: Color, size: float) -> void:
+	parts.append({"pos": at, "vel": Vector2.ZERO, "life": 9, "max": 9, "color": color, "size": size,
+		"kind": "star", "rot": randf() * TAU})
+
+
 func dust(at: Vector2) -> void:
-	for i in 8:
-		parts.append({"pos": at + Vector2(randf_range(-30, 30), -4), "vel": Vector2(randf_range(-1.5, 1.5), randf_range(-1.2, -0.2)),
-			"life": 24, "max": 24, "color": Color(0.8, 0.75, 0.9, 0.6), "size": randf_range(5.0, 9.0), "kind": "dust"})
+	for i in 10:
+		parts.append({"pos": at + Vector2(randf_range(-34, 34), -4), "vel": Vector2(randf_range(-1.8, 1.8), randf_range(-1.4, -0.2)),
+			"life": 28, "max": 28, "color": Color(0.75, 0.68, 0.85, 0.55), "size": randf_range(6.0, 11.0), "kind": "dust"})
 
 
 func _update_fx() -> void:
 	shake *= 0.85
+	white_flash *= 0.74
 	if super_flash > 0:
 		super_flash -= 1
 	ann.t += 1
@@ -462,42 +548,100 @@ func _update_fx() -> void:
 		p.pos += p.vel
 		if p.kind == "spark":
 			p.vel *= 0.86
+			p.vel.y += 0.15
+		elif p.kind == "dust":
+			p.vel *= 0.94
 		p.life -= 1
 	parts = parts.filter(func(p): return p.life > 0)
+	for m in _motes:
+		var mp: Vector2 = m.pos
+		mp += m.vel + Vector2(sin(frame * 0.02 + m.ph) * 0.15, 0)
+		if mp.x > D.W + 200.0:
+			mp.x = -200.0
+		if mp.y < 120.0:
+			mp.y = D.FLOOR - 4.0
+		m.pos = mp
 	for f in fighters:
 		if f.flash == 0 and f.disp_hp > f.hp:
 			f.disp_hp = maxf(f.hp, f.disp_hp - maxf(2.0, (f.disp_hp - f.hp) * 0.06))
 		elif f.disp_hp < f.hp:
 			f.disp_hp = f.hp
 	_fx_layer.queue_redraw()
+	_glow_layer.queue_redraw()
 	_dark_layer.queue_redraw()
-	_bg_layer.queue_redraw()
+	_flash_layer.queue_redraw()
 
 
+## Normal-blended effects: dust clouds and floating motes.
 func _draw_fx(ci: CanvasItem) -> void:
+	for m in _motes:
+		var a := 0.25 + 0.2 * sin(frame * 0.05 + m.ph)
+		ci.draw_circle(m.pos, m.r, Color(1.0, 0.8, 0.6, a))
+	for p in parts:
+		if p.kind == "dust":
+			var k: float = float(p.life) / p.max
+			var c: Color = p.color
+			ci.draw_circle(p.pos, p.size * (1.3 - k * 0.5), Color(c, c.a * k))
+
+
+## Additive (glowing) effects: projectiles, attack trails, sparks, impact stars.
+func _draw_glow(ci: CanvasItem) -> void:
+	for f in fighters:
+		var tr: Array = f.trail
+		var n := tr.size()
+		var acc: Color = f.ch.accent
+		for i in range(1, n):
+			var k := float(i) / n
+			ci.draw_line(tr[i - 1], tr[i], Color(acc, 0.35 * k), (6.0 + 18.0 * k) * f.sz(), true)
+			ci.draw_line(tr[i - 1], tr[i], Color(1, 1, 1, 0.5 * k), (2.0 + 6.0 * k) * f.sz(), true)
 	for p in projs:
 		var c: Color = p.color
 		var r: float = p.r
-		var pulse := 1.0 + sin(p.t * 0.6) * 0.12
-		ci.draw_circle(p.pos, r * 1.9 * pulse, Color(c, 0.18))
-		ci.draw_circle(p.pos, r * 1.25 * pulse, Color(c, 0.45))
-		ci.draw_circle(p.pos, r * 0.8, Color(1, 1, 1, 0.95))
+		var t: float = p.t
+		var pulse := 1.0 + sin(t * 0.6) * 0.12
+		ci.draw_circle(p.pos, r * 2.6 * pulse, Color(c, 0.08))
+		ci.draw_circle(p.pos, r * 1.8 * pulse, Color(c, 0.18))
+		ci.draw_circle(p.pos, r * 1.2 * pulse, Color(c, 0.45))
+		ci.draw_circle(p.pos, r * 0.75, Color(1, 1, 1, 0.9))
+		for j in 3:
+			var a0 := t * 0.35 + j * TAU / 3.0
+			ci.draw_arc(p.pos, r * 1.15, a0, a0 + 1.3, 10, Color(1, 1, 1, 0.55), 2.5, true)
 	for p in parts:
 		var k: float = float(p.life) / p.max
 		var c: Color = p.color
 		match p.kind:
 			"spark":
-				ci.draw_line(p.pos, p.pos - p.vel * 3.0, Color(c, k), p.size, true)
+				ci.draw_line(p.pos, p.pos - p.vel * 3.5, Color(c, k), p.size, true)
+				ci.draw_line(p.pos, p.pos - p.vel * 1.5, Color(1, 1, 1, k * 0.8), p.size * 0.5, true)
 			"ring":
-				ci.draw_arc(p.pos, p.size + (1.0 - k) * 50.0, 0, TAU, 24, Color(c, k), 4.0 * k + 1.0, true)
-			"dust":
-				ci.draw_circle(p.pos, p.size * (0.5 + k * 0.5), Color(c, c.a * k))
+				ci.draw_arc(p.pos, p.size + (1.0 - k) * 56.0, 0, TAU, 28, Color(c, k * 0.8), 5.0 * k + 1.0, true)
+			"star":
+				var rr: float = p.size * (0.6 + (1.0 - k) * 0.7)
+				var pts := PackedVector2Array()
+				for q in 16:
+					var ang: float = p.rot + q * TAU / 16.0
+					var rad: float = rr if q % 2 == 0 else rr * 0.22
+					pts.append(p.pos + Vector2(cos(ang), sin(ang)) * rad)
+				ci.draw_colored_polygon(pts, Color(c, k * 0.9))
+				ci.draw_circle(p.pos, rr * 0.3, Color(1, 1, 1, k))
 
 
 func _draw_dark(ci: CanvasItem) -> void:
 	if super_flash > 0:
 		var k := minf(1.0, super_flash / 10.0)
-		ci.draw_rect(Rect2(-600, -400, D.W + 1200, D.H + 800), Color(0.05, 0.0, 0.12, 0.6 * k))
+		ci.draw_rect(Rect2(-800, -600, D.W + 1600, D.H + 1200), Color(0.05, 0.0, 0.12, 0.62 * k))
+		if super_user:
+			var c := super_user.position + Vector2(0, -90.0 * super_user.sz())
+			var acc: Color = super_user.ch.accent
+			for i in 28:
+				var ang := i * TAU / 28.0 + frame * 0.07
+				var d := Vector2(cos(ang), sin(ang))
+				ci.draw_line(c + d * 110.0, c + d * 900.0, Color(acc, 0.07 * k), 4.0)
+
+
+func _draw_flash(ci: CanvasItem) -> void:
+	if white_flash > 0.01:
+		ci.draw_rect(Rect2(-800, -600, D.W + 1600, D.H + 1200), Color(1, 0.97, 0.9, white_flash))
 
 
 # ------------------------------------------------------------------ stage
@@ -506,8 +650,8 @@ func _build_stage() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 1337
 	for layer in 2:
-		var x := -420.0
-		while x < D.W + 420.0:
+		var x := -520.0
+		while x < D.W + 520.0:
 			var w := rng.randf_range(40, 95) * (1.0 if layer == 0 else 1.3)
 			var h := rng.randf_range(80, 220) * (0.75 if layer == 0 else 1.0)
 			var wins_arr: Array = []
@@ -520,52 +664,115 @@ func _build_stage() -> void:
 							wins_arr.append(Vector2(wx, wy))
 						wx += 14.0
 					wy += 18.0
-			_skyline.append({"layer": layer, "x": x, "w": w, "h": h, "wins": wins_arr})
+			var roof := rng.randi_range(0, 3)
+			_skyline.append({"layer": layer, "x": x, "w": w, "h": h, "wins": wins_arr, "roof": roof})
 			x += w + rng.randf_range(2, 14)
-	for i in 50:
-		_stars.append(Vector2(rng.randf_range(-420, D.W + 420), rng.randf_range(-200, 200)))
+	for i in 70:
+		_stars.append(Vector2(rng.randf_range(-520, D.W + 520), rng.randf_range(-300, 220)))
+	for i in 7:
+		_clouds.append({"x": rng.randf_range(-600, D.W + 600), "y": rng.randf_range(40, 230),
+			"w": rng.randf_range(90, 200), "speed": rng.randf_range(0.08, 0.25)})
+	for i in 26:
+		_motes.append({"pos": Vector2(rng.randf_range(-200, D.W + 200), rng.randf_range(150, D.FLOOR)),
+			"vel": Vector2(rng.randf_range(0.1, 0.35), rng.randf_range(-0.25, -0.05)),
+			"r": rng.randf_range(1.0, 2.4), "ph": rng.randf() * TAU})
+
+
+## Offset that makes a background layer move at `f` times the camera speed.
+func _par(f: float) -> Vector2:
+	return (cam - Vector2(D.W * 0.5, D.H * 0.5)) * (1.0 - f)
 
 
 func _draw_bg(ci: CanvasItem) -> void:
-	var top := -400.0
-	var bottom := D.H + 400.0
-	# Sky gradient (dusk).
-	var bands := [Color(0.08, 0.05, 0.16), Color(0.2, 0.09, 0.3), Color(0.55, 0.18, 0.35), Color(0.95, 0.45, 0.3)]
-	var ys := [top, 120.0, 260.0, 380.0]
+	var top := -500.0
+	var bottom := D.H + 500.0
+	var L := -900.0
+	var R := D.W + 900.0
+	# Sky gradient (dusk), fixed to the screen.
+	ci.draw_set_transform(_par(0.0), 0.0, Vector2.ONE)
+	var bands := [Color(0.06, 0.04, 0.14), Color(0.17, 0.08, 0.28), Color(0.5, 0.16, 0.36), Color(0.96, 0.46, 0.3), Color(1.0, 0.62, 0.36)]
+	var ys := [top, 110.0, 250.0, 370.0, 430.0]
 	for i in bands.size() - 1:
-		var pts := PackedVector2Array([Vector2(-600, ys[i]), Vector2(D.W + 600, ys[i]), Vector2(D.W + 600, ys[i + 1]), Vector2(-600, ys[i + 1])])
+		var pts := PackedVector2Array([Vector2(L, ys[i]), Vector2(R, ys[i]), Vector2(R, ys[i + 1]), Vector2(L, ys[i + 1])])
 		ci.draw_polygon(pts, PackedColorArray([bands[i], bands[i], bands[i + 1], bands[i + 1]]))
-	ci.draw_rect(Rect2(-600, 380, D.W + 1200, 40), bands[3])
-	for s in _stars:
-		ci.draw_circle(s, 1.2, Color(1, 1, 1, 0.5 + 0.3 * sin(frame * 0.05 + s.x)))
-	# Setting sun.
-	ci.draw_circle(Vector2(640, 330), 90, Color(1.0, 0.65, 0.35, 0.25))
-	ci.draw_circle(Vector2(640, 330), 62, Color(1.0, 0.78, 0.45))
-	# Skyline silhouettes.
+	ci.draw_set_transform(_par(0.03), 0.0, Vector2.ONE)
+	for st in _stars:
+		var tw := 0.45 + 0.35 * sin(frame * 0.05 + st.x)
+		ci.draw_circle(st, 1.3, Color(1, 1, 1, tw * clampf((260.0 - st.y) / 200.0, 0.0, 1.0)))
+	# Setting sun with glow and retro bands.
+	ci.draw_set_transform(_par(0.08), 0.0, Vector2.ONE)
+	var sun := Vector2(640, 340)
+	for i in 16:
+		ci.draw_circle(sun, 66.0 + i * 14.0, Color(1.0, 0.55, 0.35, 0.028))
+	ci.draw_circle(sun, 64, Color(1.0, 0.72, 0.42))
+	ci.draw_circle(sun + Vector2(0, -10), 52, Color(1.0, 0.84, 0.55))
+	for i in 5:
+		var by := sun.y + 8.0 + i * 11.0
+		ci.draw_rect(Rect2(sun.x - 70, by, 140, 2.0 + i * 1.3), bands[3])
+	# Drifting clouds lit from below.
+	ci.draw_set_transform(_par(0.15), 0.0, Vector2.ONE)
+	for c in _clouds:
+		var cx: float = fposmod(c.x + frame * c.speed + 900.0, D.W + 1800.0) - 900.0
+		var cy: float = c.y
+		var cw: float = c.w
+		for j in 4:
+			var o := Vector2(cx + (j - 1.5) * cw * 0.3, cy + absf(j - 1.5) * 6.0)
+			ci.draw_set_transform(_par(0.15) + o, 0.0, Vector2(1.0, 0.38))
+			ci.draw_circle(Vector2.ZERO, cw * 0.32, Color(0.55, 0.22, 0.42, 0.35))
+			ci.draw_circle(Vector2(0, 10), cw * 0.26, Color(1.0, 0.55, 0.45, 0.18))
+	# Skyline silhouettes: far layer then near layer.
 	var horizon := 420.0
-	for b in _skyline:
-		var col := Color(0.3, 0.13, 0.32) if b.layer == 0 else Color(0.13, 0.07, 0.18)
-		var bx: float = b.x
-		var bw: float = b.w
-		var bh: float = b.h
-		ci.draw_rect(Rect2(bx, horizon - bh, bw, bh), col)
-		for wv in b.wins:
-			ci.draw_rect(Rect2(bx + wv.x, horizon - bh + wv.y, 6, 9), Color(1.0, 0.85, 0.45, 0.55))
+	for layer in 2:
+		ci.draw_set_transform(_par(0.28 if layer == 0 else 0.52), 0.0, Vector2.ONE)
+		for b in _skyline:
+			if b.layer != layer:
+				continue
+			var col := Color(0.36, 0.14, 0.34) if layer == 0 else Color(0.12, 0.06, 0.17)
+			var bx: float = b.x
+			var bw: float = b.w
+			var bh: float = b.h
+			ci.draw_rect(Rect2(bx, horizon - bh, bw, bh + 40.0), col)
+			if layer == 1:
+				ci.draw_rect(Rect2(bx + bw - 3.0, horizon - bh, 3.0, bh), Color(1.0, 0.5, 0.35, 0.18))
+				match int(b.roof):
+					1:
+						ci.draw_rect(Rect2(bx + bw * 0.3, horizon - bh - 14.0, bw * 0.3, 14.0), col)
+					2:
+						ci.draw_line(Vector2(bx + bw * 0.5, horizon - bh), Vector2(bx + bw * 0.5, horizon - bh - 30.0), col, 3.0)
+				for wv in b.wins:
+					ci.draw_rect(Rect2(bx + wv.x, horizon - bh + wv.y, 6, 9), Color(1.0, 0.83, 0.45, 0.6))
+		if layer == 0:
+			ci.draw_rect(Rect2(L, horizon - 30.0, R - L, 70.0), Color(1.0, 0.45, 0.4, 0.1))
 	# Antenna with a blinking light.
-	ci.draw_line(Vector2(140, 420), Vector2(140, 250), Color(0.1, 0.05, 0.14), 4)
-	ci.draw_line(Vector2(120, 300), Vector2(160, 300), Color(0.1, 0.05, 0.14), 3)
+	ci.draw_set_transform(_par(0.55), 0.0, Vector2.ONE)
+	var dk := Color(0.1, 0.05, 0.14)
+	ci.draw_line(Vector2(140, 440), Vector2(140, 250), dk, 4)
+	ci.draw_line(Vector2(120, 300), Vector2(160, 300), dk, 3)
+	ci.draw_line(Vector2(126, 330), Vector2(154, 330), dk, 3)
 	if (frame / 40) % 2 == 0:
 		ci.draw_circle(Vector2(140, 248), 5, Color(1, 0.2, 0.2))
-		ci.draw_circle(Vector2(140, 248), 12, Color(1, 0.2, 0.2, 0.25))
-	# Rooftop floor.
-	ci.draw_rect(Rect2(-600, horizon, D.W + 1200, bottom - horizon), Color(0.16, 0.13, 0.2))
-	ci.draw_rect(Rect2(-600, horizon, D.W + 1200, 14), Color(0.32, 0.27, 0.38))
-	ci.draw_rect(Rect2(-600, horizon + 14, D.W + 1200, 4), Color(0.08, 0.06, 0.1))
-	for i in range(-12, 25):
+		ci.draw_circle(Vector2(140, 248), 14, Color(1, 0.2, 0.2, 0.25))
+	# Rooftop floor (moves with the fighters).
+	ci.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	var floor_pts := PackedVector2Array([Vector2(L, horizon), Vector2(R, horizon), Vector2(R, bottom), Vector2(L, bottom)])
+	var f_top := Color(0.22, 0.17, 0.27)
+	var f_bot := Color(0.06, 0.05, 0.1)
+	ci.draw_polygon(floor_pts, PackedColorArray([f_top, f_top, f_bot, f_bot]))
+	# Warm sun reflection streaking across the roof.
+	var sx := 640.0 + _par(0.08).x
+	var refl := PackedVector2Array([Vector2(sx - 45, horizon + 18), Vector2(sx + 45, horizon + 18), Vector2(sx + 180, bottom), Vector2(sx - 180, bottom)])
+	ci.draw_polygon(refl, PackedColorArray([Color(1, 0.6, 0.4, 0.16), Color(1, 0.6, 0.4, 0.16), Color(1, 0.6, 0.4, 0.0), Color(1, 0.6, 0.4, 0.0)]))
+	ci.draw_rect(Rect2(L, horizon, R - L, 14), Color(0.36, 0.28, 0.4))
+	ci.draw_rect(Rect2(L, horizon, R - L, 3), Color(1.0, 0.62, 0.45, 0.6))
+	ci.draw_rect(Rect2(L, horizon + 14, R - L, 4), Color(0.06, 0.04, 0.09))
+	for i in range(-16, 30):
 		var x0 := i * 60.0
-		ci.draw_line(Vector2(x0, horizon + 18), Vector2(D.W * 0.5 + (x0 - D.W * 0.5) * 1.8, bottom), Color(0.22, 0.18, 0.27), 2)
-	ci.draw_line(Vector2(-600, D.FLOOR), Vector2(D.W + 600, D.FLOOR), Color(0.24, 0.2, 0.3), 2)
-	# Corner walls (stage edges).
-	for wx in [D.STAGE_L - 34.0, D.STAGE_R + 6.0]:
-		ci.draw_rect(Rect2(wx, D.FLOOR - 60, 28, 60), Color(0.24, 0.2, 0.3))
-		ci.draw_rect(Rect2(wx, D.FLOOR - 60, 28, 6), Color(0.4, 0.34, 0.46))
+		ci.draw_line(Vector2(x0, horizon + 18), Vector2(D.W * 0.5 + (x0 - D.W * 0.5) * 2.2, bottom), Color(0.26, 0.2, 0.31, 0.7), 2)
+	for j in 5:
+		var ly := horizon + 18.0 + pow(j / 5.0, 1.6) * (bottom - horizon)
+		ci.draw_line(Vector2(L, ly), Vector2(R, ly), Color(0.26, 0.2, 0.31, 0.5), 1.5)
+	# Corner pillars (stage edges) with a warm rim.
+	for wx in [D.STAGE_L - 38.0, D.STAGE_R + 8.0]:
+		ci.draw_rect(Rect2(wx, D.FLOOR - 70, 30, 74), Color(0.2, 0.16, 0.25))
+		ci.draw_rect(Rect2(wx, D.FLOOR - 70, 30, 7), Color(0.42, 0.34, 0.48))
+		ci.draw_rect(Rect2(wx + 26, D.FLOOR - 63, 4, 67), Color(1.0, 0.6, 0.42, 0.25))

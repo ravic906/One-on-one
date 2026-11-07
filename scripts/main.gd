@@ -66,6 +66,19 @@ func _ready() -> void:
 	_build_pause_button()
 	_start_demo()
 	show_screen("menu")
+	_apply_dev_flags()
+
+
+## Developer launch flags (after "--"): --showcase runs a CPU-vs-CPU match with the HUD,
+## --slowmo=0.2 slows the whole game down (handy for capturing trailers and screenshots).
+func _apply_dev_flags() -> void:
+	for arg in OS.get_cmdline_user_args():
+		if arg == "--showcase":
+			arena.setup(randi() % D.ROSTER.size(), randi() % D.ROSTER.size(), "hard", true)
+			arena.showcase = true
+			show_screen("")
+		elif arg.begins_with("--slowmo="):
+			Engine.time_scale = clampf(float(arg.get_slice("=", 1)), 0.05, 1.0)
 
 
 func _process(_delta: float) -> void:

@@ -26,7 +26,7 @@ func _text(pos: Vector2, s: String, size: int, col: Color, align := HORIZONTAL_A
 
 
 func _draw() -> void:
-	if arena == null or arena.demo or arena.phase == "idle" or arena.fighters.size() < 2:
+	if arena == null or (arena.demo and not arena.showcase) or arena.phase == "idle" or arena.fighters.size() < 2:
 		return
 	var a: Fighter = arena.fighters[0]
 	var b: Fighter = arena.fighters[1]

@@ -42,25 +42,25 @@ static var ROSTER: Array = [
 ##  level  = "high" (block standing), "mid" (block either way), "low" (block crouching)
 ##  cancel = moves this one can cancel into after it connects
 static var MOVES: Dictionary = {
-	"jab": {"s": 4, "a": 3, "r": 9, "dmg": 35, "hs": 15, "bs": 9, "push": 4.0,
+	"jab": {"strike": "hand", "s": 4, "a": 3, "r": 9, "dmg": 35, "hs": 15, "bs": 9, "push": 4.0,
 		"hb": [20, 108, 58, 30], "level": "mid", "pose": "jab", "sfx": "light",
 		"cancel": ["jab", "heavy", "cjab", "low", "special", "super"]},
-	"heavy": {"s": 9, "a": 4, "r": 17, "dmg": 85, "hs": 21, "bs": 13, "push": 8.0, "lunge": 3.0,
+	"heavy": {"strike": "foot", "s": 9, "a": 4, "r": 17, "dmg": 85, "hs": 21, "bs": 13, "push": 8.0, "lunge": 3.0,
 		"hb": [20, 88, 72, 40], "level": "mid", "pose": "heavy", "sfx": "heavy",
 		"cancel": ["special", "super"]},
-	"cjab": {"s": 4, "a": 3, "r": 9, "dmg": 30, "hs": 14, "bs": 8, "push": 4.0, "crouch": true,
+	"cjab": {"strike": "hand", "s": 4, "a": 3, "r": 9, "dmg": 30, "hs": 14, "bs": 8, "push": 4.0, "crouch": true,
 		"hb": [20, 80, 56, 28], "level": "mid", "pose": "cjab", "sfx": "light",
 		"cancel": ["cjab", "jab", "low", "heavy", "special", "super"]},
-	"low": {"s": 8, "a": 4, "r": 20, "dmg": 70, "hs": 22, "bs": 14, "push": 7.0, "crouch": true, "knockdown": true,
+	"low": {"strike": "foot", "s": 8, "a": 4, "r": 20, "dmg": 70, "hs": 22, "bs": 14, "push": 7.0, "crouch": true, "knockdown": true,
 		"hb": [15, 14, 84, 26], "level": "low", "pose": "low", "sfx": "heavy",
 		"cancel": ["special", "super"]},
-	"air": {"s": 5, "a": 9, "r": 6, "dmg": 65, "hs": 18, "bs": 11, "push": 5.0, "airborne": true,
+	"air": {"strike": "foot", "s": 5, "a": 9, "r": 6, "dmg": 65, "hs": 18, "bs": 11, "push": 5.0, "airborne": true,
 		"hb": [5, 30, 62, 44], "level": "high", "pose": "air", "sfx": "heavy",
 		"cancel": []},
 	"special": {"s": 12, "a": 1, "r": 24, "proj": true, "pose": "special", "cancel": []},
-	"grab": {"s": 5, "a": 2, "r": 26, "dmg": 110, "grab": true, "knockdown": true,
+	"grab": {"strike": "hand", "s": 5, "a": 2, "r": 26, "dmg": 110, "grab": true, "knockdown": true,
 		"hb": [0, 100, 58, 80], "level": "mid", "pose": "grab", "sfx": "grab", "cancel": []},
-	"super": {"s": 16, "a": 24, "r": 22, "dmg": 250, "hs": 30, "bs": 16, "push": 10.0, "knockdown": true, "super": true,
+	"super": {"strike": "hand", "s": 16, "a": 24, "r": 22, "dmg": 250, "hs": 30, "bs": 16, "push": 10.0, "knockdown": true, "super": true,
 		"hb": [-10, 100, 80, 110], "level": "mid", "pose": "super", "sfx": "super", "cancel": []},
 }
 

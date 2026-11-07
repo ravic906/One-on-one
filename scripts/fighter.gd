@@ -42,6 +42,8 @@ var walk_ph := 0.0
 var dmg_dealt := 0
 var rp: Dictionary         ## rendered pose (lerped towards the target pose)
 var anim_t := 0.0
+var trail: Array = []      ## world positions of the striking hand/foot (motion swoosh)
+var ghosts: Array = []     ## after-images during dashes and supers
 
 
 func setup(c: Dictionary, s: int, inp: InputState) -> void:
@@ -74,6 +76,8 @@ func reset_round() -> void:
 	block_count = 0.0
 	rp = D.POSES.idle.duplicate()
 	z_index = 0
+	trail.clear()
+	ghosts.clear()
 
 
 func sz() -> float:
@@ -150,6 +154,7 @@ func tick() -> void:
 
 	_physics()
 	_update_pose()
+	_update_motion_fx()
 	queue_redraw()
 
 
@@ -463,13 +468,36 @@ func _update_pose() -> void:
 		rp[key] = lerpf(rp[key], tp[key], k)
 
 
+func _update_motion_fx() -> void:
+	# Swoosh trail follows the striking limb through the active frames.
+	if state == "attack" and move.has("strike") and mf >= int(move.s) - 1 and mf <= int(move.s) + int(move.a) + 1:
+		var sk := skeleton(rp, ch, facing)
+		trail.append(position + sk[move.strike])
+		if trail.size() > 7:
+			trail.pop_front()
+	elif trail.size() > 0:
+		trail.pop_front()
+	# After-images while dashing or during the super rush.
+	var fast: bool = state == "dash" or (state == "attack" and move.get("super", false) and mf > int(move.s))
+	if fast and state_t % 2 == 0:
+		ghosts.append({"pos": position, "pose": rp.duplicate(), "fc": facing, "life": 12})
+	for g in ghosts:
+		g.life -= 1
+	ghosts = ghosts.filter(func(g): return g.life > 0)
+
+
 func _draw() -> void:
 	var s := sz()
-	# Ground shadow, shrinks with jump height.
+	# Ground contact shadow, shrinks with jump height.
 	var h := clampf((D.FLOOR - position.y) / 200.0, 0.0, 0.7)
 	draw_set_transform(Vector2(0, D.FLOOR - position.y), 0.0, Vector2(1.0, 0.22))
-	draw_circle(Vector2.ZERO, 36.0 * s * (1.0 - h), Color(0, 0, 0, 0.35))
+	draw_circle(Vector2.ZERO, 40.0 * s * (1.0 - h), Color(0, 0, 0, 0.22))
+	draw_circle(Vector2.ZERO, 28.0 * s * (1.0 - h), Color(0, 0, 0, 0.3))
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	for g in ghosts:
+		var k: float = g.life / 12.0
+		draw_body(self, g.pose, ch, g.fc, false, 0.45 * k, anim_t,
+			Transform2D(0.0, g.pos - position), Color(ch.accent, 1.0))
 	var alpha := 1.0
 	if invuln > 0 and invuln < 100 and state != "attack" and int(anim_t * 30.0) % 2 == 0:
 		alpha = 0.55
@@ -484,21 +512,8 @@ static func _seg(o: Vector2, a: float, l: float, fc: int) -> Vector2:
 	return o + Vector2(sin(a) * l * fc, cos(a) * l)
 
 
-static func _limb(ci: CanvasItem, pts: Array, w: float, col: Color, alpha: float) -> void:
-	var out := Color(OUTLINE, alpha)
-	var c := Color(col, alpha)
-	for pass_i in 2:
-		var cc: Color = out if pass_i == 0 else c
-		var ww: float = w + 5.0 if pass_i == 0 else w
-		for i in pts.size() - 1:
-			ci.draw_line(pts[i], pts[i + 1], cc, ww, true)
-		for p in pts:
-			ci.draw_circle(p, ww * 0.5, cc)
-
-
-## Draws a fighter skeleton. Shared by in-game fighters and menu portraits.
-static func draw_body(ci: CanvasItem, p: Dictionary, c: Dictionary, fc: int, white: bool,
-		alpha: float, t: float, base: Transform2D) -> void:
+## Joint positions in local space (feet at the origin) for a pose.
+static func skeleton(p: Dictionary, c: Dictionary, fc: int) -> Dictionary:
 	var s := float(c.scale)
 	var th := 34.0 * s
 	var sh := 34.0 * s
@@ -507,16 +522,10 @@ static func draw_body(ci: CanvasItem, p: Dictionary, c: Dictionary, fc: int, whi
 	var to := 50.0 * s
 	var hd := 13.0 * s
 	var hip_h := maxf(maxf(_drop(p.lFu, p.lFl, th, sh), _drop(p.lBu, p.lBl, th, sh)), 18.0 * s)
-	var rot: float = p.rot
-	var xf := base
-	if absf(rot) > 0.001:
-		xf = base * Transform2D(rot * fc, Vector2(0, -8.0 * s * absf(sin(rot))))
-	ci.draw_set_transform_matrix(xf)
-
 	var lean: float = p.lean
 	var hip := Vector2(0, -hip_h)
 	var chest := hip + Vector2(sin(lean) * to * fc, -cos(lean) * to)
-	var shoulder := hip.lerp(chest, 0.88)
+	var shoulder := hip.lerp(chest, 0.86)
 	var head := chest + Vector2(sin(lean) * hd * 1.25 * fc, -cos(lean) * hd * 1.25)
 	var kf := _seg(hip, p.lFu, th, fc)
 	var ff := _seg(kf, p.lFl, sh, fc)
@@ -526,31 +535,140 @@ static func draw_body(ci: CanvasItem, p: Dictionary, c: Dictionary, fc: int, whi
 	var hf := _seg(ef, p.aFl, fa, fc)
 	var eb := _seg(shoulder, p.aBu, ua, fc)
 	var hb := _seg(eb, p.aBl, fa, fc)
+	return {"hip": hip, "chest": chest, "shoulder": shoulder, "head": head,
+		"kf": kf, "ff": ff, "kb": kb, "fb": fb, "ef": ef, "hf": hf, "eb": eb, "hb": hb,
+		"hand": hf, "foot": ff}
 
-	var col: Color = Color.WHITE if white else c.color
-	var dk: Color = Color(0.85, 0.85, 0.85) if white else c.dark
-	var acc: Color = Color.WHITE if white else c.accent
 
-	# Back limbs (darker), torso, front limbs.
-	_limb(ci, [shoulder, eb, hb], 10.0 * s, dk, alpha)
-	ci.draw_circle(hb, 7.5 * s, Color(dk, alpha))
-	_limb(ci, [hip, kb, fb], 12.0 * s, dk, alpha)
-	_limb(ci, [hip, chest], 22.0 * s, col, alpha)
-	ci.draw_line(hip + Vector2(-10.0 * s, 0), hip + Vector2(10.0 * s, 0), Color(acc, alpha), 6.0 * s, true)
-	_limb(ci, [hip, kf, ff], 12.0 * s, col, alpha)
+const LIGHT := Vector2(0.55, -0.83)          ## sunset light direction (upper right)
+const RIM := Color(1.0, 0.72, 0.45)
+
+
+## Outline of a tapered capsule from a (radius ra) to b (radius rb).
+static func _capsule(a: Vector2, b: Vector2, ra: float, rb: float) -> PackedVector2Array:
+	var d := b - a
+	var ang := d.angle() if d.length() > 0.001 else PI * 0.5
+	var pts := PackedVector2Array()
+	for i in 7:
+		var t := ang - PI * 0.5 + PI * i / 6.0
+		pts.append(b + Vector2(cos(t), sin(t)) * rb)
+	for i in 7:
+		var t := ang + PI * 0.5 + PI * i / 6.0
+		pts.append(a + Vector2(cos(t), sin(t)) * ra)
+	return pts
+
+
+## A shaded body part: outline, shadow side, lit side, warm rim light.
+static func _part(ci: CanvasItem, a: Vector2, b: Vector2, ra: float, rb: float, col: Color,
+		alpha: float, tint: bool) -> void:
+	if a.distance_to(b) < absf(ra - rb) + 1.0:
+		_ball(ci, b, maxf(ra, rb), col, alpha, tint)
+		return
+	if tint:
+		ci.draw_colored_polygon(_capsule(a, b, ra, rb), Color(col, alpha))
+		return
+	ci.draw_colored_polygon(_capsule(a, b, ra + 2.6, rb + 2.6), Color(OUTLINE, alpha))
+	ci.draw_colored_polygon(_capsule(a, b, ra, rb), Color(col.darkened(0.38), alpha))
+	var sh := LIGHT * 0.24
+	ci.draw_colored_polygon(_capsule(a + sh * ra, b + sh * rb, ra * 0.76, rb * 0.76), Color(col, alpha))
+	var n := (b - a).orthogonal().normalized()
+	if n.dot(LIGHT) < 0.0:
+		n = -n
+	if n.dot(LIGHT) > 0.15:
+		ci.draw_line(a + n * ra * 0.72, b + n * rb * 0.72, Color(RIM, 0.55 * alpha * n.dot(LIGHT)), maxf(1.5, minf(ra, rb) * 0.3), true)
+
+
+static func _ball(ci: CanvasItem, p: Vector2, r: float, col: Color, alpha: float, tint: bool) -> void:
+	if tint:
+		ci.draw_circle(p, r, Color(col, alpha))
+		return
+	ci.draw_circle(p, r + 2.6, Color(OUTLINE, alpha))
+	ci.draw_circle(p, r, Color(col.darkened(0.38), alpha))
+	ci.draw_circle(p + LIGHT * r * 0.2, r * 0.78, Color(col, alpha))
+	ci.draw_circle(p + LIGHT * r * 0.45, r * 0.25, Color(1, 1, 1, 0.35 * alpha))
+
+
+## Draws a fighter. Shared by in-game fighters, after-images and menu portraits.
+## tint (alpha > 0) draws a flat-coloured silhouette instead of the shaded body.
+static func draw_body(ci: CanvasItem, p: Dictionary, c: Dictionary, fc: int, white: bool,
+		alpha: float, t: float, base: Transform2D, tint := Color(0, 0, 0, 0)) -> void:
+	var s := float(c.scale)
+	var rot: float = p.rot
+	var xf := base
+	if absf(rot) > 0.001:
+		xf = base * Transform2D(rot * fc, Vector2(0, -8.0 * s * absf(sin(rot))))
+	ci.draw_set_transform_matrix(xf)
+	var k := skeleton(p, c, fc)
+	var flat := tint.a > 0.0
+
+	var col: Color = c.color
+	var pants: Color = c.dark.lerp(Color(0.1, 0.08, 0.16), 0.4)
+	var glove: Color = c.accent
+	var acc: Color = c.accent
+	var boot := Color(0.16, 0.13, 0.2)
+	if white:
+		col = Color(1, 1, 1)
+		pants = Color(0.92, 0.92, 0.95)
+		glove = Color(1, 1, 1)
+		acc = Color(1, 1, 1)
+		boot = Color(0.9, 0.9, 0.9)
+	if flat:
+		col = tint
+		pants = tint
+		glove = tint
+		acc = tint
+		boot = tint
+	var back_col := col.darkened(0.3)
+	var back_pants := pants.darkened(0.3)
+	var back_glove := glove.darkened(0.3)
+	var back_boot := boot.darkened(0.2)
+
+	# Back arm and leg (in shadow).
+	_part(ci, k.shoulder, k.eb, 6.5 * s, 5.5 * s, back_col, alpha, flat)
+	_part(ci, k.eb, k.hb, 5.5 * s, 5.0 * s, back_col, alpha, flat)
+	_ball(ci, k.hb, 7.5 * s, back_glove, alpha, flat)
+	_part(ci, k.hip, k.kb, 8.5 * s, 6.5 * s, back_pants, alpha, flat)
+	_part(ci, k.kb, k.fb, 6.5 * s, 5.0 * s, back_pants, alpha, flat)
+	_foot(ci, k.kb, k.fb, fc, s, back_boot, alpha, flat)
+
+	# Torso: hips to a broader chest, with a belt.
+	_part(ci, k.hip, k.chest, 10.5 * s, 14.0 * s, col, alpha, flat)
+	if not flat:
+		var bdir: Vector2 = (k.chest - k.hip).normalized().orthogonal()
+		ci.draw_line(k.hip - bdir * 11.0 * s, k.hip + bdir * 11.0 * s, Color(acc, alpha), 5.0 * s, true)
+
+	# Front leg.
+	_part(ci, k.hip, k.kf, 8.5 * s, 6.5 * s, pants, alpha, flat)
+	_part(ci, k.kf, k.ff, 6.5 * s, 5.0 * s, pants, alpha, flat)
+	_foot(ci, k.kf, k.ff, fc, s, boot, alpha, flat)
 
 	# Head with headband and trailing tails.
-	ci.draw_circle(head, hd + 2.5, Color(OUTLINE, alpha))
-	ci.draw_circle(head, hd, Color(col, alpha))
-	var band_y := -3.0 * s
-	ci.draw_line(head + Vector2(-hd, band_y), head + Vector2(hd, band_y), Color(acc, alpha), 5.0 * s, true)
-	var tail_root := head + Vector2(-hd * fc, band_y)
-	var wave := sin(t * 9.0) * 4.0 * s
-	ci.draw_line(tail_root, tail_root + Vector2(-16.0 * s * fc, 4.0 * s + wave), Color(acc, alpha), 4.0 * s, true)
-	ci.draw_line(tail_root, tail_root + Vector2(-13.0 * s * fc, 10.0 * s - wave), Color(acc, alpha), 3.0 * s, true)
-	ci.draw_circle(head + Vector2(5.0 * s * fc, -1.0 * s), 2.2 * s, Color(OUTLINE, alpha))
+	var hd := 13.0 * s
+	_ball(ci, k.head, hd, col, alpha, flat)
+	if not flat:
+		var band_y := -3.0 * s
+		ci.draw_line(k.head + Vector2(-hd, band_y), k.head + Vector2(hd, band_y), Color(OUTLINE, alpha), 7.5 * s, true)
+		ci.draw_line(k.head + Vector2(-hd + 1, band_y), k.head + Vector2(hd - 1, band_y), Color(acc, alpha), 5.0 * s, true)
+		var root: Vector2 = k.head + Vector2(-hd * fc, band_y)
+		var wave := sin(t * 9.0) * 4.0 * s
+		var t1 := root + Vector2(-17.0 * s * fc, 4.0 * s + wave)
+		var t2 := root + Vector2(-14.0 * s * fc, 11.0 * s - wave)
+		ci.draw_polyline(PackedVector2Array([root, t1]), Color(OUTLINE, alpha), 6.0 * s, true)
+		ci.draw_polyline(PackedVector2Array([root, t2]), Color(OUTLINE, alpha), 5.0 * s, true)
+		ci.draw_line(root, t1, Color(acc, alpha), 4.0 * s, true)
+		ci.draw_line(root, t2, Color(acc.darkened(0.15), alpha), 3.0 * s, true)
+		# Eye.
+		ci.draw_line(k.head + Vector2(3.0 * s * fc, -1.5 * s), k.head + Vector2(8.0 * s * fc, -1.0 * s), Color(OUTLINE, alpha), 2.6 * s, true)
 
-	_limb(ci, [shoulder, ef, hf], 10.0 * s, col, alpha)
-	ci.draw_circle(hf, 8.5 * s, Color(OUTLINE, alpha))
-	ci.draw_circle(hf, 6.5 * s, Color(col, alpha))
+	# Front arm on top.
+	_part(ci, k.shoulder, k.ef, 6.5 * s, 5.5 * s, col, alpha, flat)
+	_part(ci, k.ef, k.hf, 5.5 * s, 5.0 * s, col, alpha, flat)
+	_ball(ci, k.hf, 8.5 * s, glove, alpha, flat)
 	ci.draw_set_transform_matrix(Transform2D.IDENTITY)
+
+
+static func _foot(ci: CanvasItem, knee: Vector2, ankle: Vector2, fc: int, s: float, col: Color,
+		alpha: float, flat: bool) -> void:
+	var d := (ankle - knee).normalized()
+	var toe := ankle + d.rotated(-PI * 0.5 * fc) * 10.0 * s + d * 2.0 * s
+	_part(ci, ankle, toe, 5.0 * s, 4.2 * s, col, alpha, flat)

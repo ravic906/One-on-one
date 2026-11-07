@@ -1,0 +1,71 @@
+name: Build web version
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: web-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GODOT_VERSION: "4.3"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Godot and export templates
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/godot
+            ~/.local/share/godot/export_templates
+          key: godot-${{ env.GODOT_VERSION }}-web
+
+      - name: Install Godot
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/godot ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+          cd ~/godot
+          curl -sSL -o g.zip https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip
+          unzip -q g.zip && mv Godot_v${GODOT_VERSION}-stable_linux.x86_64 godot && rm g.zip
+          curl -sSL -o t.tpz https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz
+          unzip -q t.tpz 'templates/web_*' 'templates/version.txt'
+          mv templates/* ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable/
+          rm -rf t.tpz templates
+
+      - name: Import project
+        run: ~/godot/godot --headless --import || true
+
+      - name: Rules tests
+        run: ~/godot/godot --headless --script res://tests/run_tests.gd
+
+      - name: Export web build
+        run: |
+          mkdir -p build/web
+          ~/godot/godot --headless --export-release "Web" build/web/index.html
+          test -f build/web/index.wasm
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
