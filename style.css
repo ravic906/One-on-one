@@ -1,0 +1,99 @@
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body {
+  margin: 0; height: 100%; overflow: hidden; background: #14101f; color: #fff;
+  font-family: "Arial Black", "Helvetica Neue", Arial, sans-serif;
+  touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+  overscroll-behavior: none;
+}
+canvas#game { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+.hidden { display: none !important; }
+
+/* ---------- Screens ---------- */
+.screen {
+  position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; padding: max(12px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  background: radial-gradient(ellipse at center, rgba(40, 20, 60, .82), rgba(10, 6, 18, .95));
+  z-index: 20; text-align: center; overflow-y: auto;
+}
+.logo { font-size: clamp(38px, 9vw, 84px); letter-spacing: 2px; line-height: 1;
+  background: linear-gradient(#ffe36b, #ff7a2a 60%, #d8253f); -webkit-background-clip: text; background-clip: text; color: transparent;
+  filter: drop-shadow(0 4px 0 #000); }
+.logo span { font-size: .55em; vertical-align: middle; }
+.tag { color: #c9b8ff; font-family: Arial, sans-serif; font-weight: bold; letter-spacing: 1px; }
+h2 { margin: 0; font-size: clamp(20px, 4vw, 32px); color: #ffd84a; text-shadow: 0 3px 0 #000; }
+h3 { margin: 0 0 6px; color: #ffd84a; font-size: 16px; }
+.col { display: flex; flex-direction: column; gap: 10px; min-width: 220px; }
+.row { display: flex; gap: 10px; align-items: center; justify-content: center; flex-wrap: wrap; }
+
+button {
+  font: inherit; color: #fff; background: #2b2140; border: 2px solid #5b4a85; border-radius: 12px;
+  padding: 10px 18px; font-size: 15px; letter-spacing: 1px; cursor: pointer; touch-action: manipulation;
+}
+button:active { transform: scale(.96); }
+button.big { background: linear-gradient(#ff8a2a, #d8253f); border-color: #ffd08a; font-size: 20px; padding: 12px 28px; }
+.diff button.on { background: #ffd84a; color: #1a1028; border-color: #fff; }
+.diff span { color: #c9b8ff; }
+
+/* ---------- Roster ---------- */
+#roster { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+.card { width: 150px; padding: 8px; border-radius: 14px; background: #221a35; border: 3px solid #3d3160; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.card.on { border-color: #ffd84a; background: #31244d; box-shadow: 0 0 18px rgba(255, 216, 74, .4); }
+.card canvas { width: 110px; height: 110px; }
+.card .nm { font-size: 18px; }
+.card .tt { font-family: Arial, sans-serif; font-size: 11px; color: #c9b8ff; font-weight: bold; }
+.stat { display: flex; align-items: center; gap: 6px; width: 100%; font-family: Arial, sans-serif; font-size: 10px; color: #aaa; }
+.stat i { flex: 1; height: 6px; background: #120c1e; border-radius: 3px; overflow: hidden; }
+.stat i b { display: block; height: 100%; background: #ffd84a; }
+
+/* ---------- How to ---------- */
+.how { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; max-width: 900px; }
+.how > div { flex: 1 1 240px; background: #221a35; border-radius: 12px; padding: 12px; text-align: left; }
+.how p, .keys { font-family: Arial, sans-serif; font-size: 13px; margin: 4px 0; color: #e6defa; }
+.mono { font-family: "Courier New", monospace !important; color: #ffd84a !important; font-weight: bold; }
+.keys { color: #8f80b8; }
+#stats { font-family: Arial, sans-serif; font-weight: bold; color: #e6defa; line-height: 1.6; }
+
+/* ---------- Touch controls ---------- */
+#controls { position: fixed; inset: 0; z-index: 10; pointer-events: none; }
+#stickZone { position: absolute; left: 0; bottom: 0; width: 48%; height: 70%; pointer-events: auto; }
+#stickBase {
+  position: absolute; width: 130px; height: 130px; margin: -65px 0 0 -65px; border-radius: 50%;
+  background: rgba(255, 255, 255, .08); border: 2px solid rgba(255, 255, 255, .25);
+  left: calc(max(20px, env(safe-area-inset-left)) + 85px); top: calc(100% - 95px);
+}
+#stickKnob {
+  position: absolute; left: 50%; top: 50%; width: 58px; height: 58px; margin: -29px 0 0 -29px; border-radius: 50%;
+  background: rgba(255, 255, 255, .35); border: 2px solid rgba(255, 255, 255, .6);
+}
+#btns {
+  position: absolute; right: max(14px, env(safe-area-inset-right)); bottom: max(12px, env(safe-area-inset-bottom));
+  width: 200px; height: 170px; pointer-events: auto;
+}
+.btn {
+  position: absolute; width: 82px; height: 82px; border-radius: 50%; padding: 0; font-size: 11px; letter-spacing: 0;
+  border: 3px solid rgba(255, 255, 255, .55); color: #fff; text-shadow: 0 1px 2px #000; opacity: .78;
+}
+.btn.on { transform: scale(.9); opacity: 1; filter: brightness(1.4); }
+.b-light   { left: 0;     bottom: 0;    background: rgba(63, 169, 245, .55); }
+.b-heavy   { right: 0;    bottom: 10px; background: rgba(232, 72, 72, .55); }
+.b-special { right: 4px;  top: 0;       background: rgba(255, 200, 40, .55); width: 72px; height: 72px; }
+.b-grab    { left: 22px;  top: 6px;     background: rgba(150, 110, 230, .55); width: 66px; height: 66px; }
+
+#pauseBtn {
+  position: fixed; z-index: 11; top: 72px; left: 50%; transform: translateX(-50%);
+  width: 44px; height: 32px; padding: 0; font-size: 14px; background: rgba(0, 0, 0, .4); border-color: rgba(255, 255, 255, .3);
+}
+
+#rotate {
+  display: none; position: fixed; inset: 0; z-index: 50; background: #14101f; color: #ffd84a;
+  flex-direction: column; align-items: center; justify-content: center; gap: 12px; font-size: 20px; text-align: center; padding: 24px;
+}
+#rotate div { font-size: 64px; animation: spin 2s ease-in-out infinite; }
+@keyframes spin { 0%, 30% { transform: rotate(0); } 60%, 100% { transform: rotate(90deg); } }
+@media (orientation: portrait) and (pointer: coarse) { #rotate { display: flex; } }
+
+@media (max-height: 420px) {
+  .card { width: 128px; } .card canvas { width: 80px; height: 80px; }
+  .screen { gap: 8px; } button.big { padding: 8px 22px; }
+  .how p { font-size: 12px; }
+}
