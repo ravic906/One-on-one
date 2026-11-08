@@ -4,3 +4,6 @@
 /android/
 *.tmp
 export_credentials.cfg
+
+# Paid/licensed source assets: never commit to this public repo (see tools/fetch_licensed.sh)
+/assets_licensed/
