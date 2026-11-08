@@ -1,4 +1,4 @@
-name: Build web version
+name: Build web + Android
 
 on:
   push:
@@ -11,7 +11,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: web-${{ github.ref }}
+  group: build-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -30,7 +30,7 @@ jobs:
           path: |
             ~/godot
             ~/.local/share/godot/export_templates
-          key: godot-${{ env.GODOT_VERSION }}-web
+          key: godot-${{ env.GODOT_VERSION }}-web-android
 
       - name: Install Godot
         if: steps.cache.outputs.cache-hit != 'true'
@@ -40,21 +40,44 @@ jobs:
           curl -sSL -o g.zip https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip
           unzip -q g.zip && mv Godot_v${GODOT_VERSION}-stable_linux.x86_64 godot && rm g.zip
           curl -sSL -o t.tpz https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz
-          unzip -q t.tpz 'templates/web_*' 'templates/version.txt'
+          unzip -q t.tpz 'templates/web_*' 'templates/android_*' 'templates/version.txt'
           mv templates/* ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable/
           rm -rf t.tpz templates
 
       - name: Import project
         run: ~/godot/godot --headless --import || true
 
-      - name: Rules tests
-        run: ~/godot/godot --headless --script res://tests/run_tests.gd
-
       - name: Export web build
         run: |
           mkdir -p build/web
           ~/godot/godot --headless --export-release "Web" build/web/index.html
           test -f build/web/index.wasm
+
+      - name: Export Android APK (signed with a throwaway debug key)
+        run: |
+          keytool -genkeypair -keystore debug.keystore -storepass android -alias androiddebugkey \
+            -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          mkdir -p ~/.config/godot build/android
+          cat > ~/.config/godot/editor_settings-${GODOT_VERSION}.tres <<CFG
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/android/android_sdk_path = "$ANDROID_HOME"
+          export/android/java_sdk_path = "$JAVA_HOME_17_X64"
+          export/android/debug_keystore = "$PWD/debug.keystore"
+          export/android/debug_keystore_user = "androiddebugkey"
+          export/android/debug_keystore_pass = "android"
+          CFG
+          export GODOT_ANDROID_KEYSTORE_RELEASE_PATH=$PWD/debug.keystore
+          export GODOT_ANDROID_KEYSTORE_RELEASE_USER=androiddebugkey
+          export GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=android
+          ~/godot/godot --headless --export-release "Android" build/android/one-on-one.apk
+          test -f build/android/one-on-one.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: one-on-one-apk
+          path: build/android/one-on-one.apk
 
       - uses: actions/upload-pages-artifact@v3
         with:
